@@ -36,6 +36,7 @@ cp .env.example .env
 | `LLM_BASE_URL` | 可选；OpenAI 自部署端点；DeepSeek 留空走默认 `https://api.deepseek.com/v1` |
 | `LLM_TEMPERATURE` | 采样温度（默认 `0`） |
 | `LLM_MAX_TOKENS` | 单次模型回复的最大输出 token 数（默认 `4096`） |
+| `LLM_DISABLE_THINKING` | 是否禁用 thinking/reasoning；DeepSeek 默认禁用以兼容工具调用多轮对话 |
 
 ### 3. 运行
 
@@ -47,6 +48,31 @@ uv run mincc
 
 ```bash
 uv run mincc --help
+```
+
+为了避免手动测试时误改 mincc 仓库本身，可以指定启动工作目录：
+
+```bash
+uv run mincc --workdir /path/to/test-project
+# 或
+uv run mincc -C /path/to/test-project
+```
+
+运行中也可以用 `/pwd` 查看当前工作目录，用 `/cd <path>` 切换工作目录。
+
+### 手动测试沙盒
+
+项目提供了一个启动脚本，会在系统临时目录创建一个可安全修改的示例项目，
+然后自动用该目录启动 mincc：
+
+```bash
+uv run python scripts/start_test_app.py
+```
+
+也可以指定自己的沙盒目录：
+
+```bash
+uv run python scripts/start_test_app.py --workdir /path/to/sandbox
 ```
 
 ## 项目结构

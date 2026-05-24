@@ -37,6 +37,8 @@ BUILTIN_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand(name="exit", summary="退出 mincc", aliases=("quit",)),
     SlashCommand(name="help", summary="显示可用命令"),
     SlashCommand(name="clear", summary="清空当前会话历史"),
+    SlashCommand(name="pwd", summary="显示当前工作目录"),
+    SlashCommand(name="cd", summary="切换当前工作目录"),
 )
 
 

@@ -20,6 +20,7 @@ class Config:
     llm_base_url: str | None
     llm_temperature: float
     llm_max_tokens: int
+    llm_disable_thinking: bool
 
 
 def load_config(env_file: str | Path | None = None) -> Config:
@@ -35,6 +36,10 @@ def load_config(env_file: str | Path | None = None) -> Config:
     base_url = os.getenv("LLM_BASE_URL", "").strip() or None
     temperature_raw = os.getenv("LLM_TEMPERATURE", "0").strip()
     max_tokens_raw = os.getenv("LLM_MAX_TOKENS", str(DEFAULT_LLM_MAX_TOKENS)).strip()
+    disable_thinking_default = "true" if provider == "deepseek" else "false"
+    disable_thinking_raw = os.getenv(
+        "LLM_DISABLE_THINKING", disable_thinking_default
+    ).strip().lower()
 
     if provider not in SUPPORTED_PROVIDERS:
         raise ValueError(
@@ -56,6 +61,10 @@ def load_config(env_file: str | Path | None = None) -> Config:
         raise ValueError(f"LLM_MAX_TOKENS 必须是整数，当前值：{max_tokens_raw!r}") from exc
     if max_tokens <= 0:
         raise ValueError(f"LLM_MAX_TOKENS 必须大于 0，当前值：{max_tokens_raw!r}")
+    if disable_thinking_raw not in {"1", "true", "yes", "on", "0", "false", "no", "off"}:
+        raise ValueError(
+            "LLM_DISABLE_THINKING 必须是布尔值：true/false、1/0、yes/no 或 on/off"
+        )
 
     return Config(
         llm_provider=provider,
@@ -64,4 +73,5 @@ def load_config(env_file: str | Path | None = None) -> Config:
         llm_base_url=base_url,
         llm_temperature=temperature,
         llm_max_tokens=max_tokens,
+        llm_disable_thinking=disable_thinking_raw in {"1", "true", "yes", "on"},
     )

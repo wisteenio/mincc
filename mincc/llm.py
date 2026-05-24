@@ -41,14 +41,17 @@ def build_chat_model(config: Config) -> BaseChatModel:
         return init_chat_model(**kwargs)
 
     if provider == "deepseek":
-        return init_chat_model(
-            model=config.llm_model,
-            model_provider="openai",
-            api_key=config.llm_api_key,
-            base_url=config.llm_base_url or DEEPSEEK_DEFAULT_BASE_URL,
-            temperature=config.llm_temperature,
-            max_tokens=config.llm_max_tokens,
-        )
+        kwargs: dict = {
+            "model": config.llm_model,
+            "model_provider": "openai",
+            "api_key": config.llm_api_key,
+            "base_url": config.llm_base_url or DEEPSEEK_DEFAULT_BASE_URL,
+            "temperature": config.llm_temperature,
+            "max_tokens": config.llm_max_tokens,
+        }
+        if config.llm_disable_thinking:
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        return init_chat_model(**kwargs)
 
     raise ValueError(
         f"暂不支持的 LLM_PROVIDER: {provider!r}；当前支持 claude、openai、deepseek"

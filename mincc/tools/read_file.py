@@ -9,9 +9,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from langchain_core.tools import tool
+
+from mincc.tools.safety import is_sensitive_path, resolve_project_path
 
 MAX_BYTES = 1024 * 1024  # 1 MiB，避免读到超大文件把上下文塞满
 
@@ -26,12 +26,16 @@ def read_file(path: str) -> str:
     Returns:
         文件文本内容；若读取失败则返回以 "ERROR: " 开头的错误说明。
     """
-    file_path = Path(path).expanduser()
+    file_path, error = resolve_project_path(path, must_exist=True)
+    if error is not None or file_path is None:
+        return error or "ERROR: 无法解析路径"
 
     if not file_path.exists():
         return f"ERROR: 文件不存在：{file_path}"
     if not file_path.is_file():
         return f"ERROR: 路径不是文件：{file_path}"
+    if is_sensitive_path(file_path):
+        return f"ERROR: 拒绝读取敏感文件：{file_path}"
 
     size = file_path.stat().st_size
     if size > MAX_BYTES:

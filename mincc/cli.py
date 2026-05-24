@@ -30,6 +30,9 @@ def chat(
     env_file: Path | None = typer.Option(  # noqa: B008
         None, "--env-file", help="自定义 .env 文件路径"
     ),
+    workdir: Path | None = typer.Option(  # noqa: B008
+        None, "--workdir", "-C", help="启动后切换到指定工作目录"
+    ),
     _version: bool = typer.Option(  # noqa: B008
         False,
         "--version",
@@ -40,7 +43,7 @@ def chat(
     ),
 ) -> None:
     """全屏交互模式：底部输入，上方滚动历史。"""
-    run_event_loop(env_file)
+    run_event_loop(env_file, workdir)
 
 
 if __name__ == "__main__":

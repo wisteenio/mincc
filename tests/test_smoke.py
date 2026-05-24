@@ -19,12 +19,13 @@ def test_tools_registered() -> None:
     assert all(isinstance(t, BaseTool) for t in ALL_TOOLS)
 
 
-def test_read_file_tool_smoke(tmp_path) -> None:
+def test_read_file_tool_smoke(tmp_path, monkeypatch) -> None:
     from mincc.tools.read_file import read_file
 
+    monkeypatch.chdir(tmp_path)
     target = tmp_path / "hello.txt"
     target.write_text("你好 mincc", encoding="utf-8")
-    result = read_file.invoke({"path": str(target)})
+    result = read_file.invoke({"path": "hello.txt"})
     assert "你好 mincc" in result
 
 
