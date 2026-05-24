@@ -17,14 +17,18 @@ import contextlib
 import io
 import os
 import shutil
+import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from prompt_toolkit.application import Application
+from prompt_toolkit.data_structures import Point
 from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition, to_filter
 from prompt_toolkit.formatted_text import ANSI, FormattedText, to_formatted_text
 from prompt_toolkit.formatted_text.base import StyleAndTextTuples
+from prompt_toolkit.formatted_text.utils import split_lines
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout import ConditionalContainer, HSplit, Layout, Window
@@ -39,6 +43,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from mincc.commands import match_commands, matched_name
+from mincc.permissions import CommandPermissionDecision
 
 SPINNER_FRAMES = ("✢", "✳", "✶", "✻", "✽")
 SPINNER_INTERVAL = 0.12
@@ -59,6 +64,7 @@ WELCOME_SUBTITLE = "基于 LangChain / LangGraph 的最小版本 Claude Code"
 WELCOME_HINTS: tuple[tuple[str, str], ...] = (
     ("⏎", "提交"),
     ("⇧⏎", "换行"),
+    ("⌃L or /clear", "清屏"),
     ("/", "查看可用命令"),
     ("⌃C or /exit", "退出"),
 )
@@ -98,6 +104,21 @@ VT_CAPABLE_WINDOWS_ENV_VARS = (
 class _Entry:
     role: str  # "welcome" | "user" | "assistant" | "spinner"
     text: str
+
+
+@dataclass(frozen=True)
+class _PermissionOption:
+    key: str
+    label: str
+    decision: CommandPermissionDecision
+
+
+PERMISSION_OPTIONS: tuple[_PermissionOption, ...] = (
+    _PermissionOption("1", "允许本次执行", "once"),
+    _PermissionOption("2", "永久允许此命令", "always"),
+    _PermissionOption("3", "允许所有操作，不再提示", "always_all"),
+    _PermissionOption("4", "取消执行", "deny"),
+)
 
 
 def _slash_command_token_bounds(line: str, start_at: int = 0) -> tuple[int, int] | None:
@@ -159,6 +180,7 @@ _STYLE = Style.from_dict(
         "user-msg.slash-cmd": "bg:#2a2a2a #d9a066",
         "assistant-msg": "",
         "spinner": "#ff8c42",
+        "spinner.meta": "#888888",
         "sep": "#444444",
         "input-area": "",
         "suggestion": "#888888",
@@ -259,6 +281,26 @@ def _render_markdown_ansi(text: str, width: int) -> str:
     return rendered
 
 
+def _spinner_text(frame: str, label: str, elapsed_seconds: int | None = None) -> str:
+    if elapsed_seconds is None:
+        return f"{frame} {label}"
+    return f"{frame} {label} ({elapsed_seconds}s · Esc 取消)"
+
+
+def _elapsed_seconds(started_at: float | None) -> int:
+    if started_at is None:
+        return 0
+    return max(0, int(time.monotonic() - started_at))
+
+
+def _formatted_text_end_position(text: FormattedText) -> Point:
+    lines = list(split_lines(to_formatted_text(text)))
+    if not lines:
+        return Point(x=0, y=0)
+    last_line = lines[-1]
+    return Point(x=sum(len(fragment[1]) for fragment in last_line), y=len(lines) - 1)
+
+
 def _welcome_fragments(width: int) -> list[tuple[str, str]]:
     """欢迎信息：标题 / 副标题 / 横线 / 快捷键提示，整体水平居中。
 
@@ -335,7 +377,12 @@ def _render(entries: list[_Entry]) -> FormattedText:
             ansi = _render_markdown_ansi(entry.text, width)
             fragments.extend(list(to_formatted_text(ANSI(ansi))))
         elif entry.role == "spinner":
-            fragments.append(("class:spinner", entry.text))
+            if " (" in entry.text and entry.text.endswith(")"):
+                label, meta = entry.text.rsplit(" (", 1)
+                fragments.append(("class:spinner", label))
+                fragments.append(("class:spinner.meta", f" ({meta}"))
+            else:
+                fragments.append(("class:spinner", entry.text))
     return FormattedText(fragments)
 
 
@@ -374,7 +421,15 @@ def _previous_key_was_escape(event) -> bool:
 
 
 def run_chat_ui(
-    on_submit: Callable[[str, Callable[[str], None]], str],
+    on_submit: Callable[
+        [
+            str,
+            Callable[[str], None],
+            Callable[[str], CommandPermissionDecision],
+            threading.Event | None,
+        ],
+        str,
+    ],
     input_history: list[str] | None = None,
 ) -> None:
     """启动全屏 TUI 聊天界面。
@@ -385,15 +440,28 @@ def run_chat_ui(
     spinner_idx: int | None = None
     spinner_frame = 0
     spinner_label = "准备中"
+    run_started_at: float | None = None
+    cancel_event: threading.Event | None = None
     busy = False
     history_items = input_history if input_history is not None else []
     history_cursor: int | None = None
     history_draft = ""
 
+    def _reset_entries_to_welcome() -> None:
+        entries[:] = [_Entry(role="welcome", text="")]
+
     def get_history_text() -> FormattedText:
         return _render(entries)
 
-    history_control = FormattedTextControl(text=get_history_text, focusable=False)
+    def _history_cursor_position() -> Point:
+        return _formatted_text_end_position(get_history_text())
+
+    history_control = FormattedTextControl(
+        text=get_history_text,
+        focusable=False,
+        show_cursor=False,
+        get_cursor_position=_history_cursor_position,
+    )
     history_window = Window(
         content=history_control,
         wrap_lines=True,
@@ -430,6 +498,13 @@ def run_chat_ui(
         "dismissed_for": None,
         "app": None,
     }
+    permission_state: dict = {
+        "active": False,
+        "command": "",
+        "selected": 0,
+        "event": None,
+        "decision": "deny",
+    }
 
     def _sync_ttimeout() -> None:
         """面板展开时把 vt100 解析超时调短，让单击 ESC 立即关面板。
@@ -439,7 +514,9 @@ def run_chat_ui(
         """
         a = panel_state.get("app")
         if a is not None:
-            a.ttimeoutlen = 0.05 if panel_state["matches"] else 0.5
+            a.ttimeoutlen = (
+                0.05 if busy or panel_state["matches"] or permission_state["active"] else 0.5
+            )
 
     def _refresh_matches() -> None:
         """根据当前输入刷新候选列表，并修正选中下标。"""
@@ -473,6 +550,8 @@ def run_chat_ui(
     input_area.buffer.on_text_changed += lambda _buf: _refresh_matches()
 
     has_suggestions = Condition(lambda: bool(panel_state["matches"]))
+    has_permission_request = Condition(lambda: bool(permission_state["active"]))
+    is_running = Condition(lambda: busy and not permission_state["active"])
 
     def _suggestion_text() -> FormattedText:
         """渲染底部命令面板：每行 '/<name>   <summary>'，选中行高亮。"""
@@ -515,8 +594,55 @@ def run_chat_ui(
         filter=has_suggestions,
     )
 
+    def _permission_text() -> FormattedText:
+        if not permission_state["active"]:
+            return FormattedText([])
+        command = str(permission_state["command"])
+        selected = int(permission_state["selected"])
+        width = _term_width()
+        fragments: list[tuple[str, str]] = [
+            ("class:suggestion.summary", "  需要授权执行命令："),
+            ("class:suggestion.name", command),
+            ("", "\n"),
+        ]
+        for i, option in enumerate(PERMISSION_OPTIONS):
+            is_cur = i == selected
+            base = "class:suggestion.current" if is_cur else "class:suggestion"
+            name_cls = "class:suggestion.current.name" if is_cur else "class:suggestion.name"
+            label_cls = (
+                "class:suggestion.current.summary" if is_cur else "class:suggestion.summary"
+            )
+            key_text = f" {option.key}. "
+            label_text = option.label
+            tail_pad = " " * max(0, width - get_cwidth(key_text) - get_cwidth(label_text))
+            fragments.append((name_cls, key_text))
+            fragments.append((label_cls, label_text))
+            fragments.append((base, tail_pad))
+            if i != len(PERMISSION_OPTIONS) - 1:
+                fragments.append(("", "\n"))
+        return FormattedText(fragments)
+
+    permission_window = Window(
+        content=FormattedTextControl(text=_permission_text, focusable=False),
+        height=Dimension(min=0),
+        dont_extend_height=True,
+        wrap_lines=False,
+    )
+    permission_panel = ConditionalContainer(
+        content=permission_window,
+        filter=has_permission_request,
+    )
+
     root_container = HSplit(
-        [history_window, sep_top, input_area, sep_bottom, suggestion_panel, filler]
+        [
+            history_window,
+            sep_top,
+            input_area,
+            sep_bottom,
+            permission_panel,
+            suggestion_panel,
+            filler,
+        ]
     )
 
     kb = KeyBindings()
@@ -525,6 +651,65 @@ def run_chat_ui(
     @kb.add("c-d")
     def _exit(event) -> None:
         event.app.exit()
+
+    def _finish_permission_request(decision: CommandPermissionDecision) -> None:
+        request_event = permission_state["event"]
+        permission_state["decision"] = decision
+        permission_state["active"] = False
+        permission_state["command"] = ""
+        permission_state["selected"] = 0
+        permission_state["event"] = None
+        _sync_ttimeout()
+        if isinstance(request_event, threading.Event):
+            request_event.set()
+
+    @kb.add("up", filter=has_permission_request)
+    def _permission_up(event) -> None:
+        permission_state["selected"] = (permission_state["selected"] - 1) % len(
+            PERMISSION_OPTIONS
+        )
+        event.app.invalidate()
+
+    @kb.add("down", filter=has_permission_request)
+    def _permission_down(event) -> None:
+        permission_state["selected"] = (permission_state["selected"] + 1) % len(
+            PERMISSION_OPTIONS
+        )
+        event.app.invalidate()
+
+    @kb.add("1", filter=has_permission_request)
+    @kb.add("2", filter=has_permission_request)
+    @kb.add("3", filter=has_permission_request)
+    @kb.add("4", filter=has_permission_request)
+    def _permission_number(event) -> None:
+        index = int(event.key_sequence[-1].data) - 1
+        _finish_permission_request(PERMISSION_OPTIONS[index].decision)
+        event.app.invalidate()
+
+    @kb.add("enter", filter=has_permission_request)
+    def _permission_enter(event) -> None:
+        option = PERMISSION_OPTIONS[int(permission_state["selected"])]
+        _finish_permission_request(option.decision)
+        event.app.invalidate()
+
+    @kb.add("escape", filter=has_permission_request, eager=True)
+    def _permission_escape(event) -> None:
+        _finish_permission_request("deny")
+        event.app.invalidate()
+
+    @kb.add("escape", filter=is_running, eager=True)
+    def _cancel_running(event) -> None:
+        nonlocal spinner_label
+        if cancel_event is not None:
+            cancel_event.set()
+        spinner_label = "正在取消..."
+        if spinner_idx is not None:
+            elapsed = _elapsed_seconds(run_started_at)
+            entries[spinner_idx] = _Entry(
+                role="spinner",
+                text=_spinner_text(SPINNER_FRAMES[spinner_frame], spinner_label, elapsed),
+            )
+        event.app.invalidate()
 
     @kb.add("escape", "enter")
     @kb.add("escape", "c-j")
@@ -560,21 +745,21 @@ def run_chat_ui(
         )
         # 写回时 on_text_changed 会刷新一次；写完后通常已经包含空格，应自动隐藏
 
-    @kb.add("up", filter=has_suggestions)
+    @kb.add("up", filter=has_suggestions & ~has_permission_request)
     def _up(event) -> None:
         n = len(panel_state["matches"])
         if n:
             panel_state["selected"] = (panel_state["selected"] - 1) % n
             event.app.invalidate()
 
-    @kb.add("down", filter=has_suggestions)
+    @kb.add("down", filter=has_suggestions & ~has_permission_request)
     def _down(event) -> None:
         n = len(panel_state["matches"])
         if n:
             panel_state["selected"] = (panel_state["selected"] + 1) % n
             event.app.invalidate()
 
-    @kb.add("up", filter=~has_suggestions)
+    @kb.add("up", filter=~has_suggestions & ~has_permission_request)
     def _history_previous(event) -> None:
         nonlocal history_cursor, history_draft
         if busy or not history_items:
@@ -587,7 +772,7 @@ def run_chat_ui(
         text = history_items[history_cursor]
         input_area.buffer.document = Document(text=text, cursor_position=len(text))
 
-    @kb.add("down", filter=~has_suggestions)
+    @kb.add("down", filter=~has_suggestions & ~has_permission_request)
     def _history_next(event) -> None:
         nonlocal history_cursor
         if busy or history_cursor is None:
@@ -600,7 +785,7 @@ def run_chat_ui(
             text = history_items[history_cursor]
         input_area.buffer.document = Document(text=text, cursor_position=len(text))
 
-    @kb.add("escape", filter=has_suggestions)
+    @kb.add("escape", filter=has_suggestions & ~has_permission_request)
     def _dismiss(event) -> None:
         """ESC：关闭候选面板，记下当前文本以避免立刻重新弹出。
 
@@ -621,9 +806,28 @@ def run_chat_ui(
             _apply_selected()
             event.app.invalidate()
 
-    @kb.add("enter")
+    def _clear_screen_and_history() -> None:
+        nonlocal history_cursor, history_draft
+        on_submit("/clear", lambda _status: None, lambda _command: "deny", None)
+        _reset_entries_to_welcome()
+        history_cursor = None
+        history_draft = ""
+        panel_state["matches"] = []
+        panel_state["selected"] = 0
+        panel_state["dismissed_for"] = input_area.text
+        _sync_ttimeout()
+
+    @kb.add("c-l", filter=~has_permission_request)
+    def _clear(event) -> None:
+        if busy:
+            return
+        _clear_screen_and_history()
+        event.app.invalidate()
+
+    @kb.add("enter", filter=~has_permission_request)
     def _submit(event) -> None:
-        nonlocal busy, spinner_idx, spinner_frame, history_cursor, history_draft
+        nonlocal busy, spinner_idx, spinner_frame, spinner_label, run_started_at, cancel_event
+        nonlocal history_cursor, history_draft
         if (event.key_sequence and event.key_sequence[-1].data == XTERM_MODIFIED_SHIFT_ENTER) or (
             _previous_key_was_escape(event) and panel_state["dismissed_for"] != input_area.text
         ):
@@ -642,32 +846,60 @@ def run_chat_ui(
         if text.lstrip(" ") in {"/exit", "/quit"}:
             event.app.exit()
             return
+        if text.strip().lower() == "/clear":
+            input_area.buffer.reset()
+            _clear_screen_and_history()
+            event.app.invalidate()
+            return
         history_cursor = None
         history_draft = ""
         input_area.buffer.reset()
         entries.append(_Entry(role="user", text=text))
         # 占位 spinner 行
         spinner_frame = 0
+        spinner_label = "准备中"
+        run_started_at = time.monotonic()
+        cancel_event = threading.Event()
         entries.append(
             _Entry(
                 role="spinner",
-                text=f"{SPINNER_FRAMES[0]} {spinner_label}",
+                text=_spinner_text(SPINNER_FRAMES[0], spinner_label, 0),
             )
         )
         spinner_idx = len(entries) - 1
         busy = True
+        _sync_ttimeout()
         event.app.invalidate()
 
         loop = asyncio.get_event_loop()
 
+        def _request_command_permission(command: str) -> CommandPermissionDecision:
+            request_event = threading.Event()
+
+            def _show_request() -> None:
+                permission_state["active"] = True
+                permission_state["command"] = command
+                permission_state["selected"] = 0
+                permission_state["event"] = request_event
+                permission_state["decision"] = "deny"
+                _sync_ttimeout()
+                event.app.invalidate()
+
+            loop.call_soon_threadsafe(_show_request)
+            request_event.wait()
+            return permission_state["decision"]
+
         def _update_status(label: str) -> None:
             def _apply_status() -> None:
                 nonlocal spinner_label
+                if label == spinner_label:
+                    return
                 spinner_label = label
                 if spinner_idx is not None:
+                    elapsed = _elapsed_seconds(run_started_at)
                     entries[spinner_idx] = _Entry(
                         role="spinner",
-                        text=f"{SPINNER_FRAMES[spinner_frame]} {spinner_label}",
+                        text=_spinner_text(SPINNER_FRAMES[spinner_frame], spinner_label, elapsed),
                     )
                 event.app.invalidate()
 
@@ -680,17 +912,25 @@ def run_chat_ui(
                 if not busy or spinner_idx is None:
                     break
                 spinner_frame = (spinner_frame + 1) % len(SPINNER_FRAMES)
+                elapsed = _elapsed_seconds(run_started_at)
                 entries[spinner_idx] = _Entry(
                     role="spinner",
-                    text=f"{SPINNER_FRAMES[spinner_frame]} {spinner_label}",
+                    text=_spinner_text(SPINNER_FRAMES[spinner_frame], spinner_label, elapsed),
                 )
                 event.app.invalidate()
 
         async def _run() -> None:
-            nonlocal busy, spinner_idx
+            nonlocal busy, spinner_idx, run_started_at, cancel_event
             anim = asyncio.create_task(_animate())
             try:
-                reply = await loop.run_in_executor(None, on_submit, text, _update_status)
+                reply = await loop.run_in_executor(
+                    None,
+                    on_submit,
+                    text,
+                    _update_status,
+                    _request_command_permission,
+                    cancel_event,
+                )
             except Exception as exc:  # noqa: BLE001
                 reply = f"[error] {exc}"
             anim.cancel()
@@ -700,6 +940,9 @@ def run_chat_ui(
                 entries[spinner_idx] = _Entry(role="assistant", text=reply)
             spinner_idx = None
             busy = False
+            _sync_ttimeout()
+            run_started_at = None
+            cancel_event = None
             event.app.invalidate()
 
         asyncio.create_task(_run())
@@ -729,5 +972,7 @@ def run_chat_ui(
     try:
         app.run()
     finally:
+        if permission_state["active"]:
+            _finish_permission_request("deny")
         if key_reporting_enabled:
             _write_terminal_sequence(app.output, TERMINAL_KEY_REPORTING_DISABLE)

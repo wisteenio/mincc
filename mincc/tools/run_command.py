@@ -1,4 +1,4 @@
-"""执行受限本地命令的工具。"""
+"""执行本地命令的工具。"""
 
 from __future__ import annotations
 
@@ -8,39 +8,50 @@ import subprocess
 
 from langchain_core.tools import tool
 
-ALLOWED_COMMANDS = {
-    ("uv", "run", "pytest", "-q"),
-    ("uv", "run", "ruff", "check"),
-    ("uv", "run", "mincc", "--help"),
-}
+from mincc.permissions import is_cancelled, request_command_permission
+from mincc.storage import MinccStorage
+
 MAX_TIMEOUT_SECONDS = 120
 
 
 @tool
 def run_command(command: str, confirmed: bool = False, timeout_seconds: int = 30) -> str:
-    """在当前项目内执行白名单中的非破坏性命令。
+    """在当前项目内执行本地命令。
 
-    agent 必须先向用户说明要执行的命令并取得确认，再把 confirmed 设为 true。
-    第一版只允许固定白名单命令，不支持任意 shell 语法、管道、重定向或命令拼接。
+    运行命令属于高风险操作。agent 应先评估命令风险；除非用户已经明确授权，
+    否则不要设置 confirmed=true。未授权命令会触发 CLI 权限选择。
+    本工具不通过 shell 执行命令，因此不支持管道、重定向或命令拼接。
 
     Args:
         command: 要执行的命令，例如 "uv run pytest -q"。
-        confirmed: 用户已确认执行命令时设为 true。
+        confirmed: 兼容参数；CLI 授权面板仍会决定是否执行命令。
         timeout_seconds: 超时时间，上限 120 秒。
 
     Returns:
         命令退出码、stdout 与 stderr；失败时返回以 "ERROR: " 开头的错误说明。
     """
-    if not confirmed:
-        return "ERROR: 执行命令前必须先取得用户确认并设置 confirmed=true"
-
     try:
         parts = tuple(shlex.split(command, posix=os.name != "nt"))
     except ValueError as exc:
         return f"ERROR: 命令解析失败：{exc}"
-    if parts not in ALLOWED_COMMANDS:
-        allowed = "\n".join(" ".join(item) for item in sorted(ALLOWED_COMMANDS))
-        return f"ERROR: 命令不在白名单内。允许的命令：\n{allowed}"
+    normalized_command = " ".join(parts)
+    storage = MinccStorage.create()
+    if is_cancelled():
+        return "已取消当前操作。"
+    needs_permission = (
+        not storage.read_allow_all_operations()
+        and normalized_command not in storage.read_allowed_commands()
+    )
+    if needs_permission:
+        decision = request_command_permission(normalized_command)
+        if decision == "deny":
+            return f"已取消执行命令：{normalized_command}"
+        if decision == "always":
+            storage.allow_command(normalized_command)
+        if decision == "always_all":
+            storage.allow_all_operations()
+    if is_cancelled():
+        return "已取消当前操作。"
 
     timeout = max(1, min(timeout_seconds, MAX_TIMEOUT_SECONDS))
     try:

@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import importlib
+
+from mincc.permissions import reset_command_permission_callback, set_command_permission_callback
+from mincc.storage import MinccStorage
 from mincc.tools.edit_file import edit_file
 from mincc.tools.grep import grep
 from mincc.tools.list_files import list_files
 from mincc.tools.read_file import read_file
 from mincc.tools.run_command import run_command
 from mincc.tools.write_file import write_file
+
+run_command_module = importlib.import_module("mincc.tools.run_command")
 
 
 def test_list_files_ignores_common_dirs(tmp_path, monkeypatch) -> None:
@@ -123,10 +129,86 @@ def test_edit_file_rejects_ambiguous_replacement(tmp_path, monkeypatch) -> None:
 def test_run_command_requires_confirmation() -> None:
     result = run_command.invoke({"command": "uv run pytest -q"})
 
-    assert result.startswith("ERROR: 执行命令前必须先取得用户确认")
+    assert result == "已取消执行命令：uv run pytest -q"
 
 
-def test_run_command_rejects_non_whitelisted_command() -> None:
+def test_run_command_still_requests_permission_when_confirmed() -> None:
     result = run_command.invoke({"command": "python --version", "confirmed": True})
 
-    assert result.startswith("ERROR: 命令不在白名单内")
+    assert result == "已取消执行命令：python --version"
+
+
+def test_run_command_cancels_without_permission_callback() -> None:
+    result = run_command.invoke({"command": "python --version"})
+
+    assert result == "已取消执行命令：python --version"
+
+
+def test_run_command_can_execute_once_after_permission(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    storage = MinccStorage.create(root=tmp_path / "store", project_id="test-project")
+    monkeypatch.setattr(run_command_module.MinccStorage, "create", lambda: storage)
+
+    class Completed:
+        returncode = 0
+        stdout = "Python 3.12"
+        stderr = ""
+
+    seen: dict = {}
+
+    def fake_run(parts, **kwargs):
+        seen["parts"] = parts
+        return Completed()
+
+    monkeypatch.setattr(run_command_module.subprocess, "run", fake_run)
+    token = set_command_permission_callback(lambda _command: "once")
+    try:
+        result = run_command.invoke({"command": "python --version"})
+    finally:
+        reset_command_permission_callback(token)
+
+    assert seen["parts"] == ("python", "--version")
+    assert "stdout:\nPython 3.12" in result
+    assert storage.read_allowed_commands() == set()
+
+
+def test_run_command_can_persist_permission(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    storage = MinccStorage.create(root=tmp_path / "store", project_id="test-project")
+    monkeypatch.setattr(run_command_module.MinccStorage, "create", lambda: storage)
+
+    class Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(run_command_module.subprocess, "run", lambda _parts, **_kwargs: Completed())
+    token = set_command_permission_callback(lambda _command: "always")
+    try:
+        result = run_command.invoke({"command": "python --version"})
+    finally:
+        reset_command_permission_callback(token)
+
+    assert result == "exit_code: 0"
+    assert storage.read_allowed_commands() == {"python --version"}
+
+
+def test_run_command_can_persist_allow_all_operations(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    storage = MinccStorage.create(root=tmp_path / "store", project_id="test-project")
+    monkeypatch.setattr(run_command_module.MinccStorage, "create", lambda: storage)
+
+    class Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(run_command_module.subprocess, "run", lambda _parts, **_kwargs: Completed())
+    token = set_command_permission_callback(lambda _command: "always_all")
+    try:
+        result = run_command.invoke({"command": "python --version"})
+    finally:
+        reset_command_permission_callback(token)
+
+    assert result == "exit_code: 0"
+    assert storage.read_allow_all_operations()

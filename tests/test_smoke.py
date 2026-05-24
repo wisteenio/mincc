@@ -34,3 +34,19 @@ def test_ui_module_importable() -> None:
     from mincc.ui import run_chat_ui
 
     assert callable(run_chat_ui)
+
+
+def test_spinner_text_shows_current_step() -> None:
+    from mincc.ui import _spinner_text
+
+    assert _spinner_text("✽", "调用工具：写入文件 a.txt...") == "✽ 调用工具：写入文件 a.txt..."
+    assert _spinner_text("✽", "调用模型...", 3) == "✽ 调用模型... (3s · Esc 取消)"
+
+
+def test_formatted_text_end_position_uses_last_rendered_line() -> None:
+    from mincc.ui import _formatted_text_end_position
+
+    position = _formatted_text_end_position([("", "first\n"), ("class:spinner", "second")])
+
+    assert position.x == len("second")
+    assert position.y == 1

@@ -13,6 +13,7 @@ from pathlib import Path, PurePath
 
 MINCC_HOME = ".mincc"
 INPUT_HISTORY_TYPE = "input_history"
+COMMAND_PERMISSION_TYPE = "command_permissions"
 MAX_PROJECT_ID_LENGTH = 200
 
 
@@ -91,3 +92,41 @@ class MinccStorage:
                 if isinstance(text, str) and text:
                     out.append(text)
         return out
+
+    def allow_command(self, command: str) -> None:
+        self.append_record(COMMAND_PERMISSION_TYPE, {"command": command})
+
+    def allow_all_operations(self) -> None:
+        self.append_record(COMMAND_PERMISSION_TYPE, {"allow_all": True})
+
+    def read_allowed_commands(self) -> set[str]:
+        path = self.records_path(COMMAND_PERMISSION_TYPE)
+        if not path.exists():
+            return set()
+
+        out: set[str] = set()
+        with path.open(encoding="utf-8") as f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                command = record.get("command")
+                if isinstance(command, str) and command:
+                    out.add(command)
+        return out
+
+    def read_allow_all_operations(self) -> bool:
+        path = self.records_path(COMMAND_PERMISSION_TYPE)
+        if not path.exists():
+            return False
+
+        with path.open(encoding="utf-8") as f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if record.get("allow_all") is True:
+                    return True
+        return False
