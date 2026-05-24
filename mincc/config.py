@@ -9,6 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 SUPPORTED_PROVIDERS = ("claude", "openai", "deepseek")
+DEFAULT_LLM_MAX_TOKENS = 4096
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,7 @@ class Config:
     llm_api_key: str
     llm_base_url: str | None
     llm_temperature: float
+    llm_max_tokens: int
 
 
 def load_config(env_file: str | Path | None = None) -> Config:
@@ -32,6 +34,7 @@ def load_config(env_file: str | Path | None = None) -> Config:
     api_key = os.getenv("LLM_API_KEY", "").strip()
     base_url = os.getenv("LLM_BASE_URL", "").strip() or None
     temperature_raw = os.getenv("LLM_TEMPERATURE", "0").strip()
+    max_tokens_raw = os.getenv("LLM_MAX_TOKENS", str(DEFAULT_LLM_MAX_TOKENS)).strip()
 
     if provider not in SUPPORTED_PROVIDERS:
         raise ValueError(
@@ -47,6 +50,12 @@ def load_config(env_file: str | Path | None = None) -> Config:
         temperature = float(temperature_raw)
     except ValueError as exc:
         raise ValueError(f"LLM_TEMPERATURE 必须是数字，当前值：{temperature_raw!r}") from exc
+    try:
+        max_tokens = int(max_tokens_raw)
+    except ValueError as exc:
+        raise ValueError(f"LLM_MAX_TOKENS 必须是整数，当前值：{max_tokens_raw!r}") from exc
+    if max_tokens <= 0:
+        raise ValueError(f"LLM_MAX_TOKENS 必须大于 0，当前值：{max_tokens_raw!r}")
 
     return Config(
         llm_provider=provider,
@@ -54,4 +63,5 @@ def load_config(env_file: str | Path | None = None) -> Config:
         llm_api_key=api_key,
         llm_base_url=base_url,
         llm_temperature=temperature,
+        llm_max_tokens=max_tokens,
     )

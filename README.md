@@ -35,6 +35,7 @@ cp .env.example .env
 | `LLM_API_KEY` | API Key |
 | `LLM_BASE_URL` | 可选；OpenAI 自部署端点；DeepSeek 留空走默认 `https://api.deepseek.com/v1` |
 | `LLM_TEMPERATURE` | 采样温度（默认 `0`） |
+| `LLM_MAX_TOKENS` | 单次模型回复的最大输出 token 数（默认 `4096`） |
 
 ### 3. 运行
 
