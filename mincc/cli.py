@@ -8,13 +8,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import typer
-from langchain_core.messages import AIMessage, HumanMessage
 
 from mincc import __version__
-from mincc.agent import build_agent
-from mincc.config import load_config
-from mincc.llm import build_chat_model
-from mincc.ui import run_chat_ui
+from mincc.event_loop import run_event_loop
 
 app = typer.Typer(
     name="mincc",
@@ -44,22 +40,7 @@ def chat(
     ),
 ) -> None:
     """全屏交互模式：底部输入，上方滚动历史。"""
-    config = load_config(env_file)
-    model = build_chat_model(config)
-    agent = build_agent(model)
-
-    history: list = []
-
-    def on_submit(text: str) -> str:
-        history.append(HumanMessage(content=text))
-        result = agent.invoke({"messages": history})
-        history[:] = result["messages"]
-        final = history[-1]
-        if isinstance(final, AIMessage):
-            return str(final.content)
-        return str(final)
-
-    run_chat_ui(on_submit)
+    run_event_loop(env_file)
 
 
 if __name__ == "__main__":
