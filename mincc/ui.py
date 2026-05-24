@@ -498,7 +498,6 @@ def run_chat_ui(on_submit: Callable[[str], str]) -> None:
         # - CSI u / modifyOtherKeys 序列：Kitty、Ghostty、WezTerm、iTerm2 等现代终端
         #   可能用这些形式上报 Shift+Enter / Alt+Enter / Option+Enter。启动时只请求
         #   modifyOtherKeys level 1，以保留 Ctrl-A/F/E 等默认编辑键。
-        # 想确认自己终端到底发什么字节，可以跑：uv run python -m mincc.key_probe
         event.current_buffer.insert_text("\n")
 
     def _apply_selected() -> None:
