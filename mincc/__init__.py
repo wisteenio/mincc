@@ -1,3 +1,3 @@
-"""mincc — mini claude code，基于 LangChain / LangGraph 的命令行 AI Agent。"""
+"""基于 LangChain/LangGraph 实现的最小版本的 Claude Code。"""
 
 __version__ = "0.1.0"

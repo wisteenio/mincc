@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-mincc 是一个用 Python 3.12 实现的命令行 AI Agent，基于 LangChain / LangGraph，定位是"mini claude code"——一个可逐步演进、最终能本地化部署成可执行文件的轻量 agent。
+基于 LangChain/LangGraph 实现的最小版本的 Claude Code，用 Python 3.12 实现，可逐步演进、最终能本地化部署成可执行文件。
 
 ## 技术栈
 

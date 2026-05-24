@@ -1,6 +1,6 @@
 # mincc
 
-> mini claude code —— 一个跑在终端里的 Python AI Agent，基于 LangChain / LangGraph 构建。
+> 基于 LangChain/LangGraph 实现的最小版本的 Claude Code。
 
 ## 特性
 
