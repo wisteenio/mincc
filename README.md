@@ -60,7 +60,7 @@ uv run mincc --help
 ## 项目结构
 
 ```
-src/mincc/
+mincc/
 ├── __main__.py     # python -m mincc 入口
 ├── cli.py          # 命令行（typer）
 ├── config.py       # .env 加载与配置数据类
@@ -74,7 +74,7 @@ src/mincc/
 
 ## 新增工具
 
-1. 在 `src/mincc/tools/` 下新建模块，使用 `@tool` 装饰器：
+1. 在 `mincc/tools/` 下新建模块，使用 `@tool` 装饰器：
 
    ```python
    from langchain_core.tools import tool
@@ -85,7 +85,7 @@ src/mincc/
        ...
    ```
 
-2. 在 `src/mincc/tools/__init__.py` 中 import 并加入 `ALL_TOOLS`。
+2. 在 `mincc/tools/__init__.py` 中 import 并加入 `ALL_TOOLS`。
 
 ## 测试
 

@@ -9,8 +9,8 @@ block_cipher = None
 
 
 a = Analysis(
-    ["src/mincc/__main__.py"],
-    pathex=["src"],
+    ["mincc/__main__.py"],
+    pathex=["."],
     binaries=[],
     datas=[],
     hiddenimports=[

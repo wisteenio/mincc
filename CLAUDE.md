@@ -12,7 +12,7 @@ mincc 是一个用 Python 3.12 实现的命令行 AI Agent，基于 LangChain / 
 - **依赖管理**：[uv](https://docs.astral.sh/uv/)，所有命令以 `uv run ...` 形式调用
 - **核心库**：langchain、langgraph、langchain-anthropic、langchain-openai、python-dotenv、typer、rich
 - **打包**：PyInstaller（配置在 `build.spec`）
-- **模型 Provider**：`src/mincc/llm.py` 中通过 `init_chat_model` 工厂支持 anthropic 与 openai；国内/自部署模型走 OpenAI 兼容接口（用 `LLM_BASE_URL` 配置）
+- **模型 Provider**：`mincc/llm.py` 中通过 `init_chat_model` 工厂支持 anthropic 与 openai；国内/自部署模型走 OpenAI 兼容接口（用 `LLM_BASE_URL` 配置）
 
 ## 常用命令
 
@@ -34,8 +34,8 @@ mincc 是一个用 Python 3.12 实现的命令行 AI Agent，基于 LangChain / 
 
 ## 新增工具的标准流程
 
-1. 在 `src/mincc/tools/` 下新建一个模块，使用 `langchain_core.tools` 的 `@tool` 装饰器，docstring 写清楚用途与参数（LLM 据此选择是否调用）。
-2. 在 `src/mincc/tools/__init__.py` 中 import 该工具并加入 `ALL_TOOLS`。
+1. 在 `mincc/tools/` 下新建一个模块，使用 `langchain_core.tools` 的 `@tool` 装饰器，docstring 写清楚用途与参数（LLM 据此选择是否调用）。
+2. 在 `mincc/tools/__init__.py` 中 import 该工具并加入 `ALL_TOOLS`。
 3. 在 `tests/` 下补一个对应的最小用例。
 4. 涉及破坏性操作（写文件、执行 shell、网络请求等）时，必须在工具内部做安全校验或在 prompt 中明确要求 agent 先确认。
 
