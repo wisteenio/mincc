@@ -44,9 +44,13 @@ def test_spinner_text_shows_current_step() -> None:
 
 
 def test_formatted_text_end_position_uses_last_rendered_line() -> None:
-    from mincc.ui import _formatted_text_end_position
+    from mincc.ui import _formatted_text_end_position, _formatted_text_position_from_bottom
 
     position = _formatted_text_end_position([("", "first\n"), ("class:spinner", "second")])
 
     assert position.x == len("second")
     assert position.y == 1
+
+    previous = _formatted_text_position_from_bottom([("", "first\nsecond\nthird")], 1)
+    assert previous.x == len("second")
+    assert previous.y == 1

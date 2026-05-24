@@ -29,7 +29,6 @@ from mincc.permissions import (
     set_command_permission_callback,
 )
 from mincc.storage import MinccStorage
-from mincc.tools import ALL_TOOLS
 from mincc.ui import run_chat_ui
 
 ProgressCallback = Callable[[str], None]
@@ -340,10 +339,7 @@ class EventLoop:
             return self._change_workdir(stripped)
         if command == "/help":
             commands = "\n".join(f"- /{cmd.name}: {cmd.summary}" for cmd in list_commands())
-            tools = "\n".join(
-                f"- {tool.name}: {tool.description.splitlines()[0]}" for tool in ALL_TOOLS
-            )
-            return f"可用命令：\n{commands}\n\n可用工具：\n{tools}"
+            return f"可用命令：\n{commands}"
         return None
 
     def _change_workdir(self, command: str) -> str:

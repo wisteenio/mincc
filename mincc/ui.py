@@ -65,6 +65,7 @@ WELCOME_HINTS: tuple[tuple[str, str], ...] = (
     ("⏎", "提交"),
     ("⇧⏎", "换行"),
     ("⌃L or /clear", "清屏"),
+    ("PgUp/PgDn", "滚动历史"),
     ("/", "查看可用命令"),
     ("⌃C or /exit", "退出"),
 )
@@ -294,11 +295,16 @@ def _elapsed_seconds(started_at: float | None) -> int:
 
 
 def _formatted_text_end_position(text: FormattedText) -> Point:
+    return _formatted_text_position_from_bottom(text, 0)
+
+
+def _formatted_text_position_from_bottom(text: FormattedText, offset: int) -> Point:
     lines = list(split_lines(to_formatted_text(text)))
     if not lines:
         return Point(x=0, y=0)
-    last_line = lines[-1]
-    return Point(x=sum(len(fragment[1]) for fragment in last_line), y=len(lines) - 1)
+    y = max(0, len(lines) - 1 - max(0, offset))
+    line = lines[y]
+    return Point(x=sum(len(fragment[1]) for fragment in line), y=y)
 
 
 def _welcome_fragments(width: int) -> list[tuple[str, str]]:
@@ -446,15 +452,18 @@ def run_chat_ui(
     history_items = input_history if input_history is not None else []
     history_cursor: int | None = None
     history_draft = ""
+    history_scroll_lines = 0
 
     def _reset_entries_to_welcome() -> None:
+        nonlocal history_scroll_lines
         entries[:] = [_Entry(role="welcome", text="")]
+        history_scroll_lines = 0
 
     def get_history_text() -> FormattedText:
         return _render(entries)
 
     def _history_cursor_position() -> Point:
-        return _formatted_text_end_position(get_history_text())
+        return _formatted_text_position_from_bottom(get_history_text(), history_scroll_lines)
 
     history_control = FormattedTextControl(
         text=get_history_text,
@@ -785,6 +794,34 @@ def run_chat_ui(
             text = history_items[history_cursor]
         input_area.buffer.document = Document(text=text, cursor_position=len(text))
 
+    def _scroll_history(delta: int) -> None:
+        nonlocal history_scroll_lines
+        history_scroll_lines = max(0, history_scroll_lines + delta)
+
+    @kb.add("pageup", filter=~has_permission_request)
+    def _history_page_up(event) -> None:
+        height = history_window.render_info.window_height if history_window.render_info else 10
+        _scroll_history(max(1, height - 2))
+        event.app.invalidate()
+
+    @kb.add("pagedown", filter=~has_permission_request)
+    def _history_page_down(event) -> None:
+        height = history_window.render_info.window_height if history_window.render_info else 10
+        _scroll_history(-max(1, height - 2))
+        event.app.invalidate()
+
+    @kb.add("end", filter=~has_permission_request)
+    def _history_scroll_bottom(event) -> None:
+        nonlocal history_scroll_lines
+        history_scroll_lines = 0
+        event.app.invalidate()
+
+    @kb.add("home", filter=~has_permission_request)
+    def _history_scroll_top(event) -> None:
+        nonlocal history_scroll_lines
+        history_scroll_lines = 100_000
+        event.app.invalidate()
+
     @kb.add("escape", filter=has_suggestions & ~has_permission_request)
     def _dismiss(event) -> None:
         """ESC：关闭候选面板，记下当前文本以避免立刻重新弹出。
@@ -827,7 +864,7 @@ def run_chat_ui(
     @kb.add("enter", filter=~has_permission_request)
     def _submit(event) -> None:
         nonlocal busy, spinner_idx, spinner_frame, spinner_label, run_started_at, cancel_event
-        nonlocal history_cursor, history_draft
+        nonlocal history_cursor, history_draft, history_scroll_lines
         if (event.key_sequence and event.key_sequence[-1].data == XTERM_MODIFIED_SHIFT_ENTER) or (
             _previous_key_was_escape(event) and panel_state["dismissed_for"] != input_area.text
         ):
@@ -853,6 +890,7 @@ def run_chat_ui(
             return
         history_cursor = None
         history_draft = ""
+        history_scroll_lines = 0
         input_area.buffer.reset()
         entries.append(_Entry(role="user", text=text))
         # 占位 spinner 行

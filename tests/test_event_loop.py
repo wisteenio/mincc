@@ -225,7 +225,7 @@ def test_event_loop_help_command_does_not_call_agent_or_store_input(tmp_path) ->
 
     assert "可用命令" in reply
     assert "/clear" in reply
-    assert "可用工具" in reply
+    assert "可用工具" not in reply
     assert agent.calls == []
     assert loop.history == []
     assert storage.read_inputs() == []
