@@ -8,6 +8,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+SUPPORTED_PROVIDERS = ("claude", "openai", "deepseek")
+
 
 @dataclass(frozen=True)
 class Config:
@@ -31,6 +33,11 @@ def load_config(env_file: str | Path | None = None) -> Config:
     base_url = os.getenv("LLM_BASE_URL", "").strip() or None
     temperature_raw = os.getenv("LLM_TEMPERATURE", "0").strip()
 
+    if provider not in SUPPORTED_PROVIDERS:
+        raise ValueError(
+            f"不支持的 LLM_PROVIDER: {provider!r}；"
+            f"当前仅支持 {', '.join(SUPPORTED_PROVIDERS)}"
+        )
     if not model:
         raise ValueError("缺少 LLM_MODEL 环境变量，请在 .env 中配置")
     if not api_key:

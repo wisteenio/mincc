@@ -6,7 +6,7 @@
 
 - Python 3.12，使用 [uv](https://docs.astral.sh/uv/) 做依赖管理
 - 基于 [LangGraph](https://langchain-ai.github.io/langgraph/) 的 ReAct agent
-- 模型 provider 可自定义：Anthropic、OpenAI 官方、国内模型（DeepSeek / 通义 / 智谱 / Moonshot 等走 OpenAI 兼容接口）、自部署模型
+- 模型 provider 支持：Claude（Anthropic）、OpenAI、DeepSeek
 - 工具系统采用注册表模式，新增工具只需放入 `src/mincc/tools/` 并加入注册表
 - 命令行用 [typer](https://typer.tiangolo.com/) + [rich](https://rich.readthedocs.io/) 渲染
 - 支持 PyInstaller 打包成单文件可执行程序
@@ -30,28 +30,19 @@ cp .env.example .env
 
 | 变量 | 说明 |
 |---|---|
-| `LLM_PROVIDER` | `anthropic` 或 `openai`（国内/自部署模型也走 `openai`） |
+| `LLM_PROVIDER` | `claude`、`openai` 或 `deepseek` |
 | `LLM_MODEL` | 模型名，例：`claude-sonnet-4-5`、`gpt-4o-mini`、`deepseek-chat` |
 | `LLM_API_KEY` | API Key |
-| `LLM_BASE_URL` | OpenAI 兼容接口的自定义端点（可选） |
+| `LLM_BASE_URL` | 可选；OpenAI 自部署端点；DeepSeek 留空走默认 `https://api.deepseek.com/v1` |
 | `LLM_TEMPERATURE` | 采样温度（默认 `0`） |
 
 ### 3. 运行
 
-交互模式：
-
 ```bash
 uv run mincc
-# 或显式：uv run mincc chat
 ```
 
-单次执行：
-
-```bash
-uv run mincc run "用一句话介绍你自己"
-```
-
-查看帮助：
+输入 `/exit` 或 `/quit` 退出。查看帮助：
 
 ```bash
 uv run mincc --help

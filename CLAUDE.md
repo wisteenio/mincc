@@ -12,7 +12,7 @@ mincc 是一个用 Python 3.12 实现的命令行 AI Agent，基于 LangChain / 
 - **依赖管理**：[uv](https://docs.astral.sh/uv/)，所有命令以 `uv run ...` 形式调用
 - **核心库**：langchain、langgraph、langchain-anthropic、langchain-openai、python-dotenv、typer、rich
 - **打包**：PyInstaller（配置在 `build.spec`）
-- **模型 Provider**：`mincc/llm.py` 中通过 `init_chat_model` 工厂支持 anthropic 与 openai；国内/自部署模型走 OpenAI 兼容接口（用 `LLM_BASE_URL` 配置）
+- **模型 Provider**：`mincc/llm.py` 中通过 `init_chat_model` 工厂支持 `claude`、`openai`、`deepseek` 三种；DeepSeek 走 OpenAI 兼容接口（默认端点 `https://api.deepseek.com/v1`，可用 `LLM_BASE_URL` 覆盖）
 
 ## 常用命令
 
@@ -20,7 +20,6 @@ mincc 是一个用 Python 3.12 实现的命令行 AI Agent，基于 LangChain / 
 |---|---|
 | 安装依赖 | `uv sync` |
 | 运行交互模式 | `uv run mincc` |
-| 单次执行 | `uv run mincc run "<prompt>"` |
 | 跑测试 | `uv run pytest -q` |
 | Lint | `uv run ruff check` |
 | 格式化 | `uv run ruff format` |
