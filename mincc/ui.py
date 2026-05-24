@@ -22,11 +22,13 @@ from prompt_toolkit.application import Application
 from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition, to_filter
 from prompt_toolkit.formatted_text import ANSI, FormattedText, to_formatted_text
+from prompt_toolkit.formatted_text.base import StyleAndTextTuples
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout import ConditionalContainer, HSplit, Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
+from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.output import Output
 from prompt_toolkit.styles import Style
 from prompt_toolkit.utils import get_cwidth
@@ -38,6 +40,7 @@ from mincc.commands import match_commands, matched_name
 
 SPINNER_FRAMES = ("✢", "✳", "✶", "✻", "✽")
 SPINNER_INTERVAL = 0.12
+USER_MESSAGE_CONTENT_START = 2
 
 # 终端无法真的放大字号，标题用块状字符拼成"伪大字"以获得视觉重量。
 # 每个字母/词组占一块，整体居中显示。手写而非引入 pyfiglet，避免新增依赖。
@@ -53,7 +56,7 @@ WELCOME_TITLE_FALLBACK = "✦ Mini Claude Code"
 WELCOME_SUBTITLE = "基于 LangChain / LangGraph 的最小版本 Claude Code"
 WELCOME_HINTS: tuple[tuple[str, str], ...] = (
     ("⏎", "提交"),
-    ("⇧⏎ / ⌥⏎", "换行"),
+    ("⇧⏎", "换行"),
     ("/", "查看可用命令"),
     ("⌃C or /exit", "退出"),
 )
@@ -65,9 +68,7 @@ XTERM_ENABLE_MODIFY_OTHER_KEYS_ALT_ONLY = "\x1b[>4;1m"
 XTERM_RESET_MODIFY_OTHER_KEYS = "\x1b[>4m"
 XTERM_RESTORE_ALT_MODES = "\x1b[?1036;1039r"
 TERMINAL_KEY_REPORTING_ENABLE = (
-    XTERM_SAVE_ALT_MODES
-    + XTERM_ENABLE_ALT_SENDS_ESCAPE
-    + XTERM_ENABLE_MODIFY_OTHER_KEYS_ALT_ONLY
+    XTERM_SAVE_ALT_MODES + XTERM_ENABLE_ALT_SENDS_ESCAPE + XTERM_ENABLE_MODIFY_OTHER_KEYS_ALT_ONLY
 )
 TERMINAL_KEY_REPORTING_DISABLE = XTERM_RESET_MODIFY_OTHER_KEYS + XTERM_RESTORE_ALT_MODES
 
@@ -76,6 +77,52 @@ TERMINAL_KEY_REPORTING_DISABLE = XTERM_RESET_MODIFY_OTHER_KEYS + XTERM_RESTORE_A
 class _Entry:
     role: str  # "welcome" | "user" | "assistant" | "spinner"
     text: str
+
+
+def _slash_command_token_bounds(line: str, start_at: int = 0) -> tuple[int, int] | None:
+    """返回一行中斜杠命令 token 的起止位置，允许 token 前有缩进空格。"""
+    start = start_at
+    while start < len(line) and line[start] == " ":
+        start += 1
+    if start >= len(line) or line[start] != "/":
+        return None
+
+    end = len(line)
+    for i in range(start, len(line)):
+        if line[i].isspace():
+            end = i
+            break
+    if end == start:
+        return None
+    return start, end
+
+
+class _SlashCommandLexer(Lexer):
+    """高亮输入区首行的斜杠命令 token。"""
+
+    def lex_document(self, document: Document) -> Callable[[int], StyleAndTextTuples]:
+        lines = document.lines
+
+        def get_line(lineno: int) -> StyleAndTextTuples:
+            line = lines[lineno]
+            if lineno != 0:
+                return [("", line)]
+
+            bounds = _slash_command_token_bounds(line)
+            if bounds is None:
+                return [("", line)]
+            start, end = bounds
+            return [
+                fragment
+                for fragment in [
+                    ("", line[:start]),
+                    ("class:input.slash-cmd", line[start:end]),
+                    ("", line[end:]),
+                ]
+                if fragment[1]
+            ]
+
+        return get_line
 
 
 _STYLE = Style.from_dict(
@@ -88,6 +135,7 @@ _STYLE = Style.from_dict(
         "welcome.rule": "#444444",
         "user-prompt": "bg:#2a2a2a #888888",
         "user-msg": "bg:#2a2a2a #ffffff",
+        "user-msg.slash-cmd": "bg:#2a2a2a #d9a066",
         "assistant-msg": "",
         "spinner": "#ff8c42",
         "sep": "#444444",
@@ -98,6 +146,7 @@ _STYLE = Style.from_dict(
         "suggestion.current": "bg:#3a3a3a #ffffff bold",
         "suggestion.current.name": "bg:#3a3a3a #ffffff bold",
         "suggestion.current.summary": "bg:#3a3a3a #dddddd",
+        "input.slash-cmd": "#ff8c42 bold",
     }
 )
 
@@ -145,6 +194,24 @@ def _user_lines(text: str, width: int) -> list[str]:
         pad = max(0, width - used)
         out.append(head + body + " " * pad)
     return out
+
+
+def _user_line_fragments(line: str) -> list[tuple[str, str]]:
+    """用户历史行的样式切分：保留背景，同时高亮斜杠命令 token。"""
+    # _user_lines 会在第一行加 "› "，后续行加两个空格缩进；命令从其后开始判定。
+    bounds = _slash_command_token_bounds(line, start_at=USER_MESSAGE_CONTENT_START)
+    if bounds is None:
+        return [("class:user-msg", line)]
+    start, end = bounds
+    return [
+        fragment
+        for fragment in [
+            ("class:user-msg", line[:start]),
+            ("class:user-msg.slash-cmd", line[start:end]),
+            ("class:user-msg", line[end:]),
+        ]
+        if fragment[1]
+    ]
 
 
 def _render_markdown_ansi(text: str, width: int) -> str:
@@ -242,7 +309,7 @@ def _render(entries: list[_Entry]) -> FormattedText:
             for j, line in enumerate(lines):
                 if j > 0:
                     fragments.append(("class:user-msg", "\n"))
-                fragments.append(("class:user-msg", line))
+                fragments.extend(_user_line_fragments(line))
         elif entry.role == "assistant":
             ansi = _render_markdown_ansi(entry.text, width)
             fragments.extend(list(to_formatted_text(ANSI(ansi))))
@@ -263,8 +330,7 @@ def _write_terminal_sequence(output: Output, sequence: str) -> None:
 def _previous_key_was_escape(event) -> bool:
     """上一段已处理按键是裸 ESC，常见于 Alt/Option+Enter 被拆包。"""
     return (
-        len(event.previous_key_sequence) == 1
-        and event.previous_key_sequence[-1].key == Keys.Escape
+        len(event.previous_key_sequence) == 1 and event.previous_key_sequence[-1].key == Keys.Escape
     )
 
 
@@ -297,6 +363,7 @@ def run_chat_ui(on_submit: Callable[[str], str]) -> None:
         height=Dimension(min=1),
         style="class:input-area",
         focus_on_click=True,
+        lexer=_SlashCommandLexer(),
     )
     # TextArea 内部 Window 默认会被 HSplit 撑高，需要显式禁止，
     # 这样输入区高度只跟随内容行数，而不是占满剩余空间。
@@ -441,8 +508,12 @@ def run_chat_ui(on_submit: Callable[[str], str]) -> None:
             return
         cmd = matches[panel_state["selected"]]
         name = matched_name(cmd, input_area.text)
-        replacement = f"/{name} "
-        input_area.buffer.document = Document(text=replacement, cursor_position=len(replacement))
+        leading_spaces = input_area.text[: len(input_area.text) - len(input_area.text.lstrip(" "))]
+        replacement = f"{leading_spaces}/{name} "
+        input_area.buffer.document = Document(
+            text=replacement,
+            cursor_position=len(replacement),
+        )
         # 写回时 on_text_changed 会刷新一次；写完后通常已经包含空格，应自动隐藏
 
     @kb.add("up", filter=has_suggestions)
@@ -483,12 +554,8 @@ def run_chat_ui(on_submit: Callable[[str], str]) -> None:
     @kb.add("enter")
     def _submit(event) -> None:
         nonlocal busy, spinner_idx, spinner_frame
-        if (
-            event.key_sequence
-            and event.key_sequence[-1].data == XTERM_MODIFIED_SHIFT_ENTER
-        ) or (
-            _previous_key_was_escape(event)
-            and panel_state["dismissed_for"] != input_area.text
+        if (event.key_sequence and event.key_sequence[-1].data == XTERM_MODIFIED_SHIFT_ENTER) or (
+            _previous_key_was_escape(event) and panel_state["dismissed_for"] != input_area.text
         ):
             event.current_buffer.insert_text("\n")
             return
@@ -499,10 +566,10 @@ def run_chat_ui(on_submit: Callable[[str], str]) -> None:
             return
         if busy:
             return
-        text = input_area.text.strip()
-        if not text:
+        text = input_area.text.rstrip()
+        if not text.strip():
             return
-        if text in {"/exit", "/quit"}:
+        if text.lstrip(" ") in {"/exit", "/quit"}:
             event.app.exit()
             return
         input_area.buffer.reset()

@@ -48,20 +48,26 @@ def list_commands() -> list[SlashCommand]:
     return list(BUILTIN_COMMANDS)
 
 
+def _command_text(text: str) -> str:
+    """去掉命令前用于缩进的空格，保留后续内容用于匹配。"""
+    return text.lstrip(" ")
+
+
 def match_commands(text: str) -> list[SlashCommand]:
     """根据当前输入行返回应展示的命令列表。
 
     规则：
-    - 不以 `/` 开头：返回空。
-    - 行内含空格：说明已经在写参数，不再做命令名补全，返回空。
+    - 去掉前导空格后不以 `/` 开头：返回空。
+    - 命令 token 后含空白：说明已经在写参数，不再做命令名补全，返回空。
     - 否则按命令名/别名前缀匹配（大小写不敏感），保留 list_commands() 顺序。
       若一个命令的多个名字都命中，仅保留一份（以主名为准）。
     """
-    if not text.startswith("/"):
+    command_text = _command_text(text)
+    if not command_text.startswith("/"):
         return []
-    if " " in text:
+    if any(ch.isspace() for ch in command_text):
         return []
-    prefix = text[1:].lower()
+    prefix = command_text[1:].lower()
     out: list[SlashCommand] = []
     for cmd in list_commands():
         names = (cmd.name, *cmd.aliases)
@@ -76,7 +82,8 @@ def matched_name(cmd: SlashCommand, text: str) -> str:
     用于补全后写回输入框：用户输入 `/qu` 命中 `quit` 别名，应补成 `/quit `。
     若没有任何名字命中（理论上不会发生，因为已经 match 过了），退化到主名。
     """
-    prefix = text[1:].lower() if text.startswith("/") else text.lower()
+    command_text = _command_text(text)
+    prefix = command_text[1:].lower() if command_text.startswith("/") else command_text.lower()
     for n in (cmd.name, *cmd.aliases):
         if n.lower().startswith(prefix):
             return n
