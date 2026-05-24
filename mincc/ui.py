@@ -7,6 +7,7 @@
 - Ctrl-C / Ctrl-D 退出。
 
 LLM 调用通过 on_submit 回调传入，由本模块在后台线程跑，UI 主循环不阻塞。
+on_submit 可通过 update_status 回调更新当前执行阶段。
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import io
+import os
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -71,6 +73,25 @@ TERMINAL_KEY_REPORTING_ENABLE = (
     XTERM_SAVE_ALT_MODES + XTERM_ENABLE_ALT_SENDS_ESCAPE + XTERM_ENABLE_MODIFY_OTHER_KEYS_ALT_ONLY
 )
 TERMINAL_KEY_REPORTING_DISABLE = XTERM_RESET_MODIFY_OTHER_KEYS + XTERM_RESTORE_ALT_MODES
+XTERM_LIKE_TERMS = (
+    "xterm",
+    "screen",
+    "tmux",
+    "rxvt",
+    "kitty",
+    "wezterm",
+    "ghostty",
+    "alacritty",
+    "foot",
+    "contour",
+)
+VT_CAPABLE_WINDOWS_ENV_VARS = (
+    "WT_SESSION",
+    "TERM_PROGRAM",
+    "VSCODE_INJECTION",
+    "ConEmuANSI",
+    "MSYSTEM",
+)
 
 
 @dataclass
@@ -327,6 +348,24 @@ def _write_terminal_sequence(output: Output, sequence: str) -> None:
         return
 
 
+def _supports_terminal_key_reporting(output: Output) -> bool:
+    """判断当前输出后端是否适合写 xterm 私有按键上报序列。"""
+    output_name = type(output).__name__.lower()
+    if "dummy" in output_name:
+        return False
+
+    term = os.environ.get("TERM", "").lower()
+    if term == "dumb":
+        return False
+
+    if os.name == "nt":
+        return any(os.environ.get(name) for name in VT_CAPABLE_WINDOWS_ENV_VARS) or any(
+            marker in term for marker in XTERM_LIKE_TERMS
+        )
+
+    return any(marker in term for marker in XTERM_LIKE_TERMS)
+
+
 def _previous_key_was_escape(event) -> bool:
     """上一段已处理按键是裸 ESC，常见于 Alt/Option+Enter 被拆包。"""
     return (
@@ -334,16 +373,22 @@ def _previous_key_was_escape(event) -> bool:
     )
 
 
-def run_chat_ui(on_submit: Callable[[str], str]) -> None:
+def run_chat_ui(
+    on_submit: Callable[[str, Callable[[str], None]], str],
+    input_history: list[str] | None = None,
+) -> None:
     """启动全屏 TUI 聊天界面。
 
-    on_submit: 接收用户输入字符串，返回 AI 最终回复字符串（同步阻塞调用）。
+    on_submit: 接收用户输入字符串与状态更新回调，返回 AI 最终回复字符串（同步阻塞调用）。
     """
     entries: list[_Entry] = [_Entry(role="welcome", text="")]
     spinner_idx: int | None = None
     spinner_frame = 0
-    spinner_label = "Gallivanting…"
+    spinner_label = "准备中"
     busy = False
+    history_items = input_history if input_history is not None else []
+    history_cursor: int | None = None
+    history_draft = ""
 
     def get_history_text() -> FormattedText:
         return _render(entries)
@@ -529,6 +574,32 @@ def run_chat_ui(on_submit: Callable[[str], str]) -> None:
             panel_state["selected"] = (panel_state["selected"] + 1) % n
             event.app.invalidate()
 
+    @kb.add("up", filter=~has_suggestions)
+    def _history_previous(event) -> None:
+        nonlocal history_cursor, history_draft
+        if busy or not history_items:
+            return
+        if history_cursor is None:
+            history_draft = input_area.text
+            history_cursor = len(history_items) - 1
+        else:
+            history_cursor = max(0, history_cursor - 1)
+        text = history_items[history_cursor]
+        input_area.buffer.document = Document(text=text, cursor_position=len(text))
+
+    @kb.add("down", filter=~has_suggestions)
+    def _history_next(event) -> None:
+        nonlocal history_cursor
+        if busy or history_cursor is None:
+            return
+        if history_cursor >= len(history_items) - 1:
+            text = history_draft
+            history_cursor = None
+        else:
+            history_cursor += 1
+            text = history_items[history_cursor]
+        input_area.buffer.document = Document(text=text, cursor_position=len(text))
+
     @kb.add("escape", filter=has_suggestions)
     def _dismiss(event) -> None:
         """ESC：关闭候选面板，记下当前文本以避免立刻重新弹出。
@@ -552,7 +623,7 @@ def run_chat_ui(on_submit: Callable[[str], str]) -> None:
 
     @kb.add("enter")
     def _submit(event) -> None:
-        nonlocal busy, spinner_idx, spinner_frame
+        nonlocal busy, spinner_idx, spinner_frame, history_cursor, history_draft
         if (event.key_sequence and event.key_sequence[-1].data == XTERM_MODIFIED_SHIFT_ENTER) or (
             _previous_key_was_escape(event) and panel_state["dismissed_for"] != input_area.text
         ):
@@ -571,6 +642,8 @@ def run_chat_ui(on_submit: Callable[[str], str]) -> None:
         if text.lstrip(" ") in {"/exit", "/quit"}:
             event.app.exit()
             return
+        history_cursor = None
+        history_draft = ""
         input_area.buffer.reset()
         entries.append(_Entry(role="user", text=text))
         # 占位 spinner 行
@@ -586,6 +659,19 @@ def run_chat_ui(on_submit: Callable[[str], str]) -> None:
         event.app.invalidate()
 
         loop = asyncio.get_event_loop()
+
+        def _update_status(label: str) -> None:
+            def _apply_status() -> None:
+                nonlocal spinner_label
+                spinner_label = label
+                if spinner_idx is not None:
+                    entries[spinner_idx] = _Entry(
+                        role="spinner",
+                        text=f"{SPINNER_FRAMES[spinner_frame]} {spinner_label}",
+                    )
+                event.app.invalidate()
+
+            loop.call_soon_threadsafe(_apply_status)
 
         async def _animate() -> None:
             nonlocal spinner_frame
@@ -604,7 +690,7 @@ def run_chat_ui(on_submit: Callable[[str], str]) -> None:
             nonlocal busy, spinner_idx
             anim = asyncio.create_task(_animate())
             try:
-                reply = await loop.run_in_executor(None, on_submit, text)
+                reply = await loop.run_in_executor(None, on_submit, text, _update_status)
             except Exception as exc:  # noqa: BLE001
                 reply = f"[error] {exc}"
             anim.cancel()
@@ -626,6 +712,8 @@ def run_chat_ui(on_submit: Callable[[str], str]) -> None:
         nonlocal key_reporting_enabled
         if key_reporting_enabled:
             return
+        if not _supports_terminal_key_reporting(a.output):
+            return
         key_reporting_enabled = True
         _write_terminal_sequence(a.output, TERMINAL_KEY_REPORTING_ENABLE)
 
@@ -641,4 +729,5 @@ def run_chat_ui(on_submit: Callable[[str], str]) -> None:
     try:
         app.run()
     finally:
-        _write_terminal_sequence(app.output, TERMINAL_KEY_REPORTING_DISABLE)
+        if key_reporting_enabled:
+            _write_terminal_sequence(app.output, TERMINAL_KEY_REPORTING_DISABLE)

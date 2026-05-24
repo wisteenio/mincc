@@ -18,6 +18,7 @@ from mincc.ui import (
     TERMINAL_KEY_REPORTING_ENABLE,
     XTERM_MODIFIED_SHIFT_ENTER,
     _previous_key_was_escape,
+    _supports_terminal_key_reporting,
     _write_terminal_sequence,
 )
 
@@ -201,6 +202,37 @@ def test_write_terminal_sequence_flushes_raw_output() -> None:
 
     assert output.writes == ["abc"]
     assert output.flush_count == 1
+
+
+def test_terminal_key_reporting_skips_dummy_output() -> None:
+    """测试/管道输出不应写入真实终端私有控制序列。"""
+    from prompt_toolkit.output import DummyOutput
+
+    assert not _supports_terminal_key_reporting(DummyOutput())
+
+
+def test_terminal_key_reporting_skips_dumb_terminal(monkeypatch) -> None:
+    """TERM=dumb 时不启用 xterm 私有按键上报。"""
+    from prompt_toolkit.output import DummyOutput
+
+    class RecordingOutput(DummyOutput):
+        pass
+
+    monkeypatch.setenv("TERM", "dumb")
+
+    assert not _supports_terminal_key_reporting(RecordingOutput())
+
+
+def test_terminal_key_reporting_allows_xterm_like_terminal(monkeypatch) -> None:
+    """现代 xterm-like 终端继续启用增强按键上报。"""
+    from prompt_toolkit.output import DummyOutput
+
+    class Vt100Output(DummyOutput):
+        pass
+
+    monkeypatch.setenv("TERM", "xterm-256color")
+
+    assert _supports_terminal_key_reporting(Vt100Output())
 
 
 def test_binding_starts_with_escape_waits() -> None:
