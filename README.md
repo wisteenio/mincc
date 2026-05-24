@@ -7,7 +7,7 @@
 - Python 3.12，使用 [uv](https://docs.astral.sh/uv/) 做依赖管理
 - 基于 [LangGraph](https://langchain-ai.github.io/langgraph/) 的 ReAct agent
 - 模型 provider 支持：Claude（Anthropic）、OpenAI、DeepSeek
-- 工具系统采用注册表模式，新增工具只需放入 `src/mincc/tools/` 并加入注册表
+- 工具系统采用注册表模式，新增工具只需放入 `mincc/tools/` 并加入注册表
 - 命令行用 [typer](https://typer.tiangolo.com/) + [rich](https://rich.readthedocs.io/) 渲染
 - 支持 PyInstaller 打包成单文件可执行程序
 
